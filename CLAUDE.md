@@ -10,29 +10,69 @@ server are both generated from this single source. Skills are fat markdown files
 
 ## Key files
 
-- `src/core/operations.ts` — Contract-first operation definitions (the foundation)
+### Core
+- `src/core/operations.ts` — Contract-first operation definitions (the foundation, ~29 ops)
 - `src/core/engine.ts` — Pluggable engine interface (BrainEngine)
 - `src/core/postgres-engine.ts` — Postgres + pgvector implementation
 - `src/core/db.ts` — Connection management, schema initialization
+- `src/core/types.ts` — All shared TypeScript types (Page, Chunk, SearchResult, Link, etc.)
+- `src/core/config.ts` — Config load/save (`~/.gbrain/config.json`), env var precedence
 - `src/core/import-file.ts` — importFromFile + importFromContent (chunk + embed + tags)
-- `src/core/sync.ts` — Pure sync functions (manifest parsing, filtering, slug conversion)
-- `src/core/storage.ts` — Pluggable storage interface (S3, Supabase Storage, local)
+- `src/core/sync.ts` — Pure sync functions (manifest parsing, filtering, `slugifyPath`)
+- `src/core/markdown.ts` — Markdown + frontmatter parsing (gray-matter → PageInput)
+- `src/core/migrate.ts` — Embedded schema migration runner (runs on initSchema)
+- `src/core/embedding.ts` — OpenAI text-embedding-3-large, batch, retry, backoff
+- `src/core/storage.ts` — Pluggable storage interface (StorageBackend)
+- `src/core/storage/` — Storage backends: `local.ts`, `s3.ts`, `supabase.ts`
 - `src/core/supabase-admin.ts` — Supabase admin API (project discovery, pgvector check)
 - `src/core/file-resolver.ts` — MIME detection, content hashing for file uploads
-- `src/core/chunkers/` — 3-tier chunking (recursive, semantic, LLM-guided)
-- `src/core/search/` — Hybrid search: vector + keyword + RRF + multi-query expansion + dedup
-- `src/core/embedding.ts` — OpenAI text-embedding-3-large, batch, retry, backoff
+- `src/core/yaml-lite.ts` — Minimal YAML parser for .supabase markers and redirects
+- `src/core/index.ts` — Core library exports
+- `src/core/chunkers/` — 3-tier chunking: `recursive.ts`, `semantic.ts`, `llm.ts`
+- `src/core/search/` — Hybrid search: `vector.ts`, `keyword.ts`, `hybrid.ts`, `expansion.ts`, `dedup.ts`
+
+### Commands (business logic, separate from CLI wiring)
+- `src/commands/sync.ts` — Sync a git repo to brain (performSync)
+- `src/commands/doctor.ts` — Health diagnostics (runDoctor)
+- `src/commands/check-update.ts` — GitHub release check + semver comparison
+- `src/commands/upgrade.ts` — Self-update (bun/binary/clawhub detection)
+- `src/commands/import.ts`, `init.ts`, `embed.ts`, `export.ts`, `files.ts`, `config.ts`, `call.ts`, `serve.ts`, `tools-json.ts`
+
+### Entry points & manifests
+- `src/cli.ts` — CLI entry point (thin dispatcher to commands)
 - `src/mcp/server.ts` — MCP stdio server (generated from operations)
+- `src/version.ts` — Version constant (mirrors `VERSION` file)
+- `VERSION` — Plain text version (currently `0.5.1`)
 - `src/schema.sql` — Full Postgres + pgvector DDL (includes files table)
 - `openclaw.plugin.json` — ClawHub bundle plugin manifest
+- `skills/manifest.json` — Skill registry (name, path, description)
+
+### Docs
+- `docs/GBRAIN_SKILLPACK.md` — Full agent skillpack (Sections 1–17)
+- `docs/GBRAIN_RECOMMENDED_SCHEMA.md` — Recommended brain schema directories
+- `docs/GBRAIN_VERIFY.md` — End-to-end installation verification runbook
+- `docs/ENGINES.md` — Engine comparison and selection guide
+- `docs/SQLITE_ENGINE.md` — SQLite engine documentation
+- `docs/GBRAIN_V0.md` — Migration guide from V0
 
 ## Commands
 
 Run `gbrain --help` or `gbrain --tools-json` for full command reference.
 
+Key CLI commands:
+- `gbrain init` — Initialize database + config
+- `gbrain import <path>` — Bulk import files (parallel, resumable)
+- `gbrain sync` — Incremental sync from git repo
+- `gbrain query <text>` — Hybrid search (vector + keyword + expansion)
+- `gbrain doctor` — Health diagnostics
+- `gbrain check-update` — Check for new versions
+- `gbrain upgrade` — Self-update
+- `gbrain serve` — Start MCP stdio server
+- `gbrain files migrate` — Move files between storage backends
+
 ## Testing
 
-`bun test` runs all tests (20 unit test files + 4 E2E test files). Unit tests run
+`bun test` runs all tests (20 unit test files + 5 E2E test files). Unit tests run
 without a database. E2E tests skip gracefully when `DATABASE_URL` is not set.
 
 Unit tests: `test/markdown.test.ts` (frontmatter parsing), `test/chunkers/recursive.test.ts`
@@ -48,12 +88,17 @@ parity), `test/cli.test.ts` (CLI structure), `test/config.test.ts` (config redac
 
 E2E tests (`test/e2e/`): Run against real Postgres+pgvector. Require `DATABASE_URL`.
 - `bun run test:e2e` runs Tier 1 (mechanical, all operations, no API keys)
-- `test/e2e/upgrade.test.ts` runs check-update E2E against real GitHub API (network required)
+- `test/e2e/mechanical.test.ts` — all 29 operations, concurrency, fixtures
+- `test/e2e/mcp.test.ts` — MCP tool generation and protocol verification
+- `test/e2e/sync.test.ts` — git repo sync pipeline
+- `test/e2e/upgrade.test.ts` — check-update E2E against real GitHub API (network required)
 - Tier 2 (`skills.test.ts`) requires OpenClaw + API keys, runs nightly in CI
 - If `.env.testing` doesn't exist in this directory, check sibling worktrees for one:
   `find ../  -maxdepth 2 -name .env.testing -print -quit` and copy it here if found.
 - Always run E2E tests when they exist. Do not skip them just because DATABASE_URL
   is not set. Start the test DB, run the tests, then tear it down.
+- E2E fixtures live in `test/e2e/fixtures/` (apple-notes, companies, concepts, deals,
+  large, meetings, people, projects, sources)
 
 ### API keys and running ALL tests
 
@@ -98,16 +143,24 @@ Do not leave containers running after tests. Do not skip E2E tests.
 Never leave `gbrain-test-pg` running. If you find a stale one from a previous run,
 stop and remove it before starting a new one.
 
+A `docker-compose.test.yml` is also available for convenience: `docker compose -f docker-compose.test.yml up -d`.
+
 ## Skills
 
 Read the skill files in `skills/` before doing brain operations. They contain the
 workflows, heuristics, and quality rules for ingestion, querying, maintenance,
-enrichment, and setup. 7 skills: ingest, query, maintain, enrich, briefing,
-migrate, setup.
+enrichment, and setup. 8 skills: ingest, query, maintain, enrich, briefing,
+migrate, setup, install.
+
+Skill registry: `skills/manifest.json` (version, paths, descriptions).
+Migrations for post-upgrade agent directives: `skills/migrations/`.
 
 ## Build
 
 `bun build --compile --outfile bin/gbrain src/cli.ts`
+
+Cross-platform builds:
+`bun run build:all` produces `bin/gbrain-darwin-arm64` and `bin/gbrain-linux-x64`.
 
 ## Pre-ship requirements
 
